@@ -3,8 +3,6 @@
 # https://github.com/lvendrame/ai-dev-team
 #
 # Usage: ./scripts/install.sh [--project-path <path>] [--force]
-#   --project-path  Root of the target project for project-level installs (default: $PWD)
-#   --force         Overwrite existing files without prompting
 #
 # Can also be run without cloning the repo:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/lvendrame/ai-dev-team/main/scripts/install.sh)
@@ -18,8 +16,7 @@ REPO_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}"
 RAW_BASE="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}"
 API_BASE="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents"
 
-# ── Mode detection: local (cloned repo) vs remote (curl) ─────────────────────
-# When run via bash <(curl ...), $0 is /dev/fd/N — dirname gives /dev/fd.
+# ── Mode detection ────────────────────────────────────────────────────────────
 _SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo "")"
 LOCAL_SKILLS_DIR="${_SCRIPT_DIR}/../skills"
 
@@ -35,13 +32,8 @@ fi
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
-  BOLD='\033[1m'
-  DIM='\033[2m'
-  GREEN='\033[0;32m'
-  YELLOW='\033[1;33m'
-  RED='\033[0;31m'
-  CYAN='\033[0;36m'
-  RESET='\033[0m'
+  BOLD='\033[1m' DIM='\033[2m' GREEN='\033[0;32m'
+  YELLOW='\033[1;33m' RED='\033[0;31m' CYAN='\033[0;36m' RESET='\033[0m'
 else
   BOLD='' DIM='' GREEN='' YELLOW='' RED='' CYAN='' RESET=''
 fi
@@ -65,18 +57,84 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# ── Checkbox selector ─────────────────────────────────────────────────────────
+# Usage: results=$(checkbox_select "Title" "item one" "item two" ...)
+# Prints selected items to stdout, one per line. Renders UI on stderr.
+checkbox_select() {
+  local title="$1"; shift
+  local -a items=("$@")
+  local n="${#items[@]}"
+  local -a sel
+  local cur=0 i
+
+  for ((i = 0; i < n; i++)); do sel[$i]=0; done
+
+  # Non-interactive fallback: return all items
+  if [ ! -t 2 ]; then
+    for ((i = 0; i < n; i++)); do printf '%s\n' "${items[$i]}"; done
+    return
+  fi
+
+  local saved_stty
+  saved_stty=$(stty -g 2>/dev/null || echo '')
+  stty raw -echo 2>/dev/null || true
+  tput civis 2>/dev/null || true
+
+  local nlines=$((n + 3))  # title + items + hint + blank line
+  for ((i = 0; i < nlines; i++)); do printf '\n' >&2; done
+
+  _render() {
+    printf '\033[%dA\r' "$nlines" >&2
+    printf '\033[K\033[1m%s\033[0m\n' "$title" >&2
+    for ((i = 0; i < n; i++)); do
+      local box pfx
+      [ "${sel[$i]}" -eq 1 ] && box='[x]' || box='[ ]'
+      [ "$i" -eq "$cur" ] && pfx='❯' || pfx=' '
+      printf '\033[K  %s %s %s\n' "$pfx" "$box" "${items[$i]}" >&2
+    done
+    printf '\033[K\033[2m  ↑↓ move  ·  Space toggle  ·  a all  ·  Enter confirm\033[0m\n' >&2
+    printf '\033[K\n' >&2
+  }
+
+  _render
+
+  while true; do
+    local ch seq
+    IFS= read -r -s -n1 ch 2>/dev/null || true
+
+    if [ "$ch" = $'\x1b' ]; then
+      IFS= read -r -s -n2 seq 2>/dev/null || true
+      case "$seq" in
+        '[A'|'OA') [ "$cur" -gt 0 ] && cur=$((cur - 1)) ;;
+        '[B'|'OB') [ "$cur" -lt $((n - 1)) ] && cur=$((cur + 1)) ;;
+      esac
+    elif [ "$ch" = ' ' ]; then
+      [ "${sel[$cur]}" -eq 1 ] && sel[$cur]=0 || sel[$cur]=1
+    elif [ "$ch" = 'a' ] || [ "$ch" = 'A' ]; then
+      for ((i = 0; i < n; i++)); do sel[$i]=1; done
+    elif [ -z "$ch" ] || [ "$ch" = $'\r' ] || [ "$ch" = $'\n' ]; then
+      break
+    fi
+    _render
+  done
+
+  [ -n "$saved_stty" ] && stty "$saved_stty" 2>/dev/null || true
+  tput cnorm 2>/dev/null || true
+
+  for ((i = 0; i < n; i++)); do
+    [ "${sel[$i]}" -eq 1 ] && printf '%s\n' "${items[$i]}"
+  done
+}
+
 # ── Remote skill fetcher ──────────────────────────────────────────────────────
 fetch_skills_from_github() {
   printf "${BOLD}Fetching skills from GitHub...${RESET}\n"
 
-  if ! command -v curl > /dev/null 2>&1; then
-    printf "${RED}Error:${RESET} curl is required but not installed.\n"; exit 1
-  fi
+  command -v curl > /dev/null 2>&1 || { printf "${RED}Error:${RESET} curl is required.\n"; exit 1; }
 
   local listing
   listing="$(curl -fsSL "${API_BASE}/skills")" || {
-    printf "${RED}Error:${RESET} Could not reach GitHub API. Check your internet connection.\n"
-    exit 1
+    printf "${RED}Error:${RESET} Could not reach GitHub API.\n"; exit 1
   }
 
   local skill_names
@@ -93,9 +151,7 @@ for item in json.load(sys.stdin):
       sed 's/.*"name": *"//;s/".*//' | grep '^aiteam-')"
   fi
 
-  if [ -z "${skill_names:-}" ]; then
-    printf "${RED}Error:${RESET} No skills found in the repository.\n"; exit 1
-  fi
+  [ -z "${skill_names:-}" ] && { printf "${RED}Error:${RESET} No skills found.\n"; exit 1; }
 
   mkdir -p "$SKILLS_DIR"
   for name in $skill_names; do
@@ -113,14 +169,12 @@ for item in json.load(sys.stdin):
 
 [ "$LOCAL_MODE" -eq 0 ] && fetch_skills_from_github
 
-# ── SKILL.md parsing helpers ──────────────────────────────────────────────────
+# ── SKILL.md parsing ──────────────────────────────────────────────────────────
 get_frontmatter_field() {
   local file="$1" field="$2"
   awk -v f="${field}:" '
     /^---/ { if (++c == 2) exit; next }
-    c == 1 && index($0, f) == 1 {
-      sub(/^[^:]+:[[:space:]]*/, ""); print; exit
-    }
+    c == 1 && index($0, f) == 1 { sub(/^[^:]+:[[:space:]]*/, ""); print; exit }
   ' "$file"
 }
 
@@ -128,48 +182,20 @@ get_body() {
   awk '/^---/ { if (++c == 2) { found=1; next } } found { print }' "$1"
 }
 
-list_skills() {
-  find "$SKILLS_DIR" -mindepth 1 -maxdepth 1 -type d | sort
-}
-
-skill_count() {
-  list_skills | wc -l | tr -d ' '
-}
-
-skill_names() {
-  # Use single-char delimiter for BSD paste (macOS), then add spaces with sed
-  list_skills | while IFS= read -r d; do basename "$d"; done | paste -sd ',' | sed 's/,/, /g'
-}
+list_skills() { find "$SKILLS_DIR" -mindepth 1 -maxdepth 1 -type d | sort; }
+skill_count()  { list_skills | wc -l | tr -d ' '; }
+skill_names()  { list_skills | while IFS= read -r d; do basename "$d"; done | paste -sd ',' | sed 's/,/, /g'; }
 
 # ── Overwrite guard ───────────────────────────────────────────────────────────
 should_overwrite() {
-  local path="$1"
-  [ ! -e "$path" ] && return 0
+  [ ! -e "$1" ] && return 0
   [ "$FORCE" -eq 1 ] && return 0
-  printf "  ${YELLOW}?${RESET} '%s' already exists. Overwrite? [y/N] " "$path"
+  printf "  ${YELLOW}?${RESET} '%s' already exists. Overwrite? [y/N] " "$1"
   read -r ans
   case "$ans" in [yY]*) return 0 ;; *) return 1 ;; esac
 }
 
-# ── Scope menu ────────────────────────────────────────────────────────────────
-# Prompts go to stderr so they remain visible when the result is captured via $()
-ask_scope() {
-  local tool_name="$1" user_path="$2" project_path="$3"
-  printf "\n  Install %s skills at:\n" "$tool_name" >&2
-  printf "    [1] User level  → %s\n" "$user_path" >&2
-  printf "    [2] Project     → %s\n" "$project_path" >&2
-  printf "    [b] Both\n" >&2
-  printf "  Selection [1]: " >&2
-  read -r scope_sel
-  case "${scope_sel:-1}" in
-    1)   echo "user" ;;
-    2)   echo "project" ;;
-    b|B) echo "both" ;;
-    *)   echo "user" ;;
-  esac
-}
-
-# ── Generic installer: copy/symlink skill dirs into a target directory ─────────
+# ── Generic directory installer ───────────────────────────────────────────────
 install_to_dir() {
   local label="$1" target_dir="$2"
   mkdir -p "$target_dir"
@@ -181,9 +207,7 @@ install_to_dir() {
     name="$(basename "$skill_dir")"
     target="$target_dir/$name"
 
-    # Local mode: skip if symlink already points to the right place
-    if [ "$LOCAL_MODE" -eq 1 ] && [ -L "$target" ] && \
-       [ "$(readlink "$target")" = "$skill_dir" ]; then
+    if [ "$LOCAL_MODE" -eq 1 ] && [ -L "$target" ] && [ "$(readlink "$target")" = "$skill_dir" ]; then
       ok "$name (symlink up to date)"
       installed=$((installed + 1))
       continue
@@ -209,19 +233,13 @@ install_to_dir() {
 }
 
 # ── Tool installers ───────────────────────────────────────────────────────────
-
 install_claude_code() {
-  local project_path="$1" scope
-  scope="$(ask_scope "Claude Code" \
-    "$HOME/.claude/skills" "$project_path/.claude/skills")"
+  local do_user="$1" do_project="$2" project_path="$3"
   printf "\n${BOLD}Claude Code${RESET}\n"
-  { [ "$scope" = "user" ]    || [ "$scope" = "both" ]; } && \
-    install_to_dir "user-level"    "$HOME/.claude/skills"
-  { [ "$scope" = "project" ] || [ "$scope" = "both" ]; } && \
-    install_to_dir "project-level" "$project_path/.claude/skills"
+  [ "$do_user" -eq 1 ]    && install_to_dir "user-level"    "$HOME/.claude/skills"
+  [ "$do_project" -eq 1 ] && install_to_dir "project-level" "$project_path/.claude/skills"
 }
 
-# Cursor is project-only; skills become individual .mdc files
 install_cursor() {
   local project_path="$1"
   local rules_dir="$project_path/.cursor/rules"
@@ -252,95 +270,98 @@ install_cursor() {
 }
 
 install_copilot() {
-  local project_path="$1" scope
-  scope="$(ask_scope "GitHub Copilot" \
-    "$HOME/.copilot/skills" "$project_path/.github/skills")"
+  local do_user="$1" do_project="$2" project_path="$3"
   printf "\n${BOLD}GitHub Copilot${RESET}\n"
-  { [ "$scope" = "user" ]    || [ "$scope" = "both" ]; } && \
-    install_to_dir "user-level"    "$HOME/.copilot/skills"
-  { [ "$scope" = "project" ] || [ "$scope" = "both" ]; } && \
-    install_to_dir "project-level" "$project_path/.github/skills"
+  [ "$do_user" -eq 1 ]    && install_to_dir "user-level"    "$HOME/.copilot/skills"
+  [ "$do_project" -eq 1 ] && install_to_dir "project-level" "$project_path/.github/skills"
 }
 
 install_opencode() {
-  local project_path="$1" scope
-  scope="$(ask_scope "OpenCode" \
-    "$HOME/.config/opencode/skills" "$project_path/.opencode/skills")"
+  local do_user="$1" do_project="$2" project_path="$3"
   printf "\n${BOLD}OpenCode${RESET}\n"
-  { [ "$scope" = "user" ]    || [ "$scope" = "both" ]; } && \
-    install_to_dir "user-level"    "$HOME/.config/opencode/skills"
-  { [ "$scope" = "project" ] || [ "$scope" = "both" ]; } && \
-    install_to_dir "project-level" "$project_path/.opencode/skills"
+  [ "$do_user" -eq 1 ]    && install_to_dir "user-level"    "$HOME/.config/opencode/skills"
+  [ "$do_project" -eq 1 ] && install_to_dir "project-level" "$project_path/.opencode/skills"
 }
 
 install_gemini() {
-  local project_path="$1" scope
-  scope="$(ask_scope "Gemini CLI" \
-    "$HOME/.gemini/skills" "$project_path/.gemini/skills")"
+  local do_user="$1" do_project="$2" project_path="$3"
   printf "\n${BOLD}Gemini CLI${RESET}\n"
-  { [ "$scope" = "user" ]    || [ "$scope" = "both" ]; } && \
-    install_to_dir "user-level"    "$HOME/.gemini/skills"
-  { [ "$scope" = "project" ] || [ "$scope" = "both" ]; } && \
-    install_to_dir "project-level" "$project_path/.gemini/skills"
+  [ "$do_user" -eq 1 ]    && install_to_dir "user-level"    "$HOME/.gemini/skills"
+  [ "$do_project" -eq 1 ] && install_to_dir "project-level" "$project_path/.gemini/skills"
 }
 
 install_codex() {
-  local project_path="$1" scope
-  scope="$(ask_scope "Codex CLI" \
-    "$HOME/.agents/skills" "$project_path/.agents/skills")"
+  local do_user="$1" do_project="$2" project_path="$3"
   printf "\n${BOLD}Codex CLI${RESET}\n"
-  { [ "$scope" = "user" ]    || [ "$scope" = "both" ]; } && \
-    install_to_dir "user-level"    "$HOME/.agents/skills"
-  { [ "$scope" = "project" ] || [ "$scope" = "both" ]; } && \
-    install_to_dir "project-level" "$project_path/.agents/skills"
+  [ "$do_user" -eq 1 ]    && install_to_dir "user-level"    "$HOME/.agents/skills"
+  [ "$do_project" -eq 1 ] && install_to_dir "project-level" "$project_path/.agents/skills"
 }
 
-# ── Main menu ─────────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 main() {
   printf "\n${BOLD}AI Dev Team — Skill Installer${RESET}\n"
   printf "${DIM}%s${RESET}\n" "$REPO_URL"
   printf "════════════════════════════════════════\n\n"
   printf "%s skills found: %s\n\n" "$(skill_count)" "$(skill_names)"
 
-  printf "${BOLD}Select AI tools to install skills for:${RESET}\n\n"
-  printf "  [1] Claude Code    ${DIM}(user/project) → ~/.claude/skills/  or  .claude/skills/${RESET}\n"
-  printf "  [2] Cursor IDE     ${DIM}(project)      → .cursor/rules/*.mdc${RESET}\n"
-  printf "  [3] GitHub Copilot ${DIM}(user/project) → ~/.copilot/skills/ or  .github/skills/${RESET}\n"
-  printf "  [4] OpenCode       ${DIM}(user/project) → ~/.config/opencode/skills/ or .opencode/skills/${RESET}\n"
-  printf "  [5] Gemini CLI     ${DIM}(user/project) → ~/.gemini/skills/  or  .gemini/skills/${RESET}\n"
-  printf "  [6] Codex CLI      ${DIM}(user/project) → ~/.agents/skills/  or  .agents/skills/${RESET}\n"
-  printf "  [a] All of the above\n\n"
-  printf "Enter selection (e.g. 1,3 or a): "
-  read -r raw_sel
+  # Step 1: Scope
+  local -a scope_sel=()
+  while IFS= read -r line; do scope_sel+=("$line"); done < <(checkbox_select \
+    "Installation scope" \
+    "User-level  — install globally (available in all projects)" \
+    "Project     — install into a specific project directory")
 
-  if [ "${raw_sel:-}" = "a" ] || [ "${raw_sel:-}" = "A" ]; then
-    selections="1 2 3 4 5 6"
-  else
-    selections="$(printf '%s' "$raw_sel" | tr ',' ' ')"
+  local do_user=0 do_project=0
+  for s in "${scope_sel[@]+"${scope_sel[@]}"}"; do
+    case "$s" in
+      User*)    do_user=1 ;;
+      Project*) do_project=1 ;;
+    esac
+  done
+
+  if [ "$do_user" -eq 0 ] && [ "$do_project" -eq 0 ]; then
+    printf "${YELLOW}⚠${RESET} No scope selected — defaulting to user-level.\n"
+    do_user=1
   fi
 
-  # All tools support at least project scope, so always ask for project path
-  printf "\nProject root path [%s]: " "$PROJECT_PATH"
-  read -r user_path_input
-  if [ -n "${user_path_input:-}" ]; then
-    PROJECT_PATH="$user_path_input"
+  # Step 2: Project path (only when needed)
+  if [ "$do_project" -eq 1 ]; then
+    printf "\nProject root path [%s]: " "$PROJECT_PATH"
+    read -r _path_input
+    [ -n "${_path_input:-}" ] && PROJECT_PATH="$_path_input"
+    if [ ! -d "$PROJECT_PATH" ]; then
+      printf "${RED}Error:${RESET} Directory not found: %s\n" "$PROJECT_PATH"
+      exit 1
+    fi
+    printf "Installing to project: %s\n" "$PROJECT_PATH"
   fi
-  if [ ! -d "$PROJECT_PATH" ]; then
-    printf "${RED}Error:${RESET} Directory not found: %s\n" "$PROJECT_PATH"
-    exit 1
+
+  # Step 3: Tool selection
+  local -a tool_sel=()
+  while IFS= read -r line; do tool_sel+=("$line"); done < <(checkbox_select \
+    "Select AI tools" \
+    "Claude Code    — ~/.claude/skills/  or  .claude/skills/" \
+    "Cursor IDE     — .cursor/rules/*.mdc  (project only)" \
+    "GitHub Copilot — ~/.copilot/skills/  or  .github/skills/" \
+    "OpenCode       — ~/.config/opencode/skills/  or  .opencode/skills/" \
+    "Gemini CLI     — ~/.gemini/skills/  or  .gemini/skills/" \
+    "Codex CLI      — ~/.agents/skills/  or  .agents/skills/")
+
+  if [ "${#tool_sel[@]}" -eq 0 ]; then
+    printf "${YELLOW}⚠${RESET} No tools selected. Nothing to install.\n\n"
+    exit 0
   fi
 
   printf "\n"
 
-  for s in $selections; do
-    case "$s" in
-      1) install_claude_code "$PROJECT_PATH" ;;
-      2) install_cursor      "$PROJECT_PATH" ;;
-      3) install_copilot     "$PROJECT_PATH" ;;
-      4) install_opencode    "$PROJECT_PATH" ;;
-      5) install_gemini      "$PROJECT_PATH" ;;
-      6) install_codex       "$PROJECT_PATH" ;;
-      *) warn "Unknown selection '$s' — skipped" ;;
+  for tool in "${tool_sel[@]}"; do
+    case "$tool" in
+      Claude*)  install_claude_code "$do_user" "$do_project" "$PROJECT_PATH" ;;
+      Cursor*)  install_cursor      "$PROJECT_PATH" ;;
+      GitHub*)  install_copilot     "$do_user" "$do_project" "$PROJECT_PATH" ;;
+      OpenCode*)install_opencode    "$do_user" "$do_project" "$PROJECT_PATH" ;;
+      Gemini*)  install_gemini      "$do_user" "$do_project" "$PROJECT_PATH" ;;
+      Codex*)   install_codex       "$do_user" "$do_project" "$PROJECT_PATH" ;;
     esac
   done
 
