@@ -4,7 +4,7 @@
 #
 # Usage: ./scripts/install.sh [--project-path <path>] [--force]
 #
-# Can also be run without cloning the repo:
+# Run without cloning the repo:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/lvendrame/ai-dev-team/main/scripts/install.sh)
 
 set -euo pipefail
@@ -51,15 +51,88 @@ while [ $# -gt 0 ]; do
     --project-path) PROJECT_PATH="$2"; shift 2 ;;
     --force)        FORCE=1; shift ;;
     -h|--help)
-      printf "Usage: %s [--project-path <path>] [--force]\n" "$0"
-      exit 0 ;;
+      printf "Usage: %s [--project-path <path>] [--force]\n" "$0"; exit 0 ;;
     *) printf "Unknown option: %s\n" "$1"; exit 1 ;;
   esac
 done
 
+# ── Skill listing helpers ─────────────────────────────────────────────────────
+list_skills()  { find "$SKILLS_DIR" -mindepth 1 -maxdepth 1 -type d | sort; }
+skill_count()  { list_skills | wc -l | tr -d ' '; }
+skill_names()  {
+  list_skills | while IFS= read -r d; do basename "$d"; done | \
+    awk 'NR==1{r=$0;next}{r=r", "$0}END{if(r!="")print r}'
+}
+
+remote_skill_count() { printf '%s' "$REMOTE_SKILL_NAMES" | awk 'NF' | wc -l | tr -d ' '; }
+remote_skill_names() {
+  printf '%s' "$REMOTE_SKILL_NAMES" | awk 'NF' | \
+    awk 'NR==1{r=$0;next}{r=r", "$0}END{print r}'
+}
+
+REMOTE_SKILL_NAMES=""
+
+# ── GitHub helpers ────────────────────────────────────────────────────────────
+_parse_dir_names() {
+  if command -v python3 > /dev/null 2>&1; then
+    python3 -c "
+import sys, json
+for item in json.load(sys.stdin):
+    if item.get('type') == 'dir':
+        print(item['name'])
+"
+  else
+    grep '"name"' | grep -v '"type"' | sed 's/.*"name": *"//;s/".*//'
+  fi
+}
+
+fetch_skill_listing() {
+  printf "Connecting to GitHub..." >&2
+  local listing
+  listing="$(curl -fsSL "${API_BASE}/skills" 2>/dev/null)" || {
+    printf "\r${RED}Error:${RESET} Could not reach GitHub API.\n"; exit 1
+  }
+  REMOTE_SKILL_NAMES="$(printf '%s' "$listing" | _parse_dir_names)"
+  printf "\r\033[K"
+}
+
+fetch_skills_from_github() {
+  printf "${BOLD}Downloading skill files...${RESET}\n"
+  mkdir -p "$SKILLS_DIR"
+  for name in $REMOTE_SKILL_NAMES; do
+    mkdir -p "$SKILLS_DIR/$name"
+    if curl -fsSL "${RAW_BASE}/skills/${name}/SKILL.md" \
+         -o "$SKILLS_DIR/$name/SKILL.md" 2>/dev/null; then
+      ok "$name"
+    else
+      warn "$name — download failed, skipped"
+      rm -rf "$SKILLS_DIR/$name"
+    fi
+  done
+  printf "\n"
+}
+
 # ── Checkbox selector ─────────────────────────────────────────────────────────
-# Usage: results=$(checkbox_select "Title" "item one" "item two" ...)
-# Prints selected items to stdout, one per line. Renders UI on stderr.
+# Populates the global _CHECKBOX_RESULT array.
+# Runs in the CURRENT shell (not a subshell) so the top-level Ctrl+C trap works.
+#
+# stty settings used:
+#   -icanon   char-by-char input (no line buffering)
+#   -echo     suppress input echo
+#   min 1     read returns after ≥1 char is available  ← required for arrows
+#   time 0    no timeout
+#   (opost stays ON → \n translates to \r\n, cursor returns to col 0)
+#   Do NOT use `stty raw`  — disables opost, breaks newline/cursor
+#   Do NOT use `stty cbreak` — does not set min/time on all platforms
+#
+# Cursor strategy: tput sc/rc (save/restore) instead of counting lines.
+# Line clearing: \r (col 0) + tput el (erase to end of line).
+# Key reading: plain `read` without -s; stty -echo already suppresses echo.
+#   `read -s` calls tcsetattr internally and can reset -icanon mid-sequence.
+#
+_CHECKBOX_RESULT=()
+_SAVED_STTY=''
+
 checkbox_select() {
   local title="$1"; shift
   local -a items=("$@")
@@ -68,123 +141,82 @@ checkbox_select() {
   local cur=0 i
 
   for ((i = 0; i < n; i++)); do sel[$i]=0; done
+  _CHECKBOX_RESULT=()
 
-  # Non-interactive fallback: return all items
   if [ ! -t 2 ]; then
-    for ((i = 0; i < n; i++)); do printf '%s\n' "${items[$i]}"; done
+    _CHECKBOX_RESULT=("${items[@]}")
     return
   fi
 
-  local saved_stty
-  saved_stty=$(stty -g 2>/dev/null || echo '')
-  stty raw -echo 2>/dev/null || true
+  _SAVED_STTY=$(stty -g 2>/dev/null || echo '')
+  stty -icanon -echo min 1 time 0 isig 2>/dev/null || true
   tput civis 2>/dev/null || true
 
-  local nlines=$((n + 3))  # title + items + hint + blank line
+  local nlines=$((n + 2))  # title + items + hint
+
+  # Reserve space then save cursor at the top of that area.
+  # tput sc/rc (save/restore cursor) avoids line-counting — reliable even
+  # when lines wrap.
   for ((i = 0; i < nlines; i++)); do printf '\n' >&2; done
+  printf '\033[%dA\r' "$nlines" >&2
+  tput sc >&2 2>/dev/null
 
   _render() {
-    printf '\033[%dA\r' "$nlines" >&2
-    printf '\033[K\033[1m%s\033[0m\n' "$title" >&2
+    tput rc >&2 2>/dev/null        # restore to saved position
+    printf '\r' >&2                # col 0
+    tput el >&2 2>/dev/null        # erase to end of line
+    printf '\033[1m%s\033[0m\n' "$title" >&2
     for ((i = 0; i < n; i++)); do
       local box pfx
       [ "${sel[$i]}" -eq 1 ] && box='[x]' || box='[ ]'
       [ "$i" -eq "$cur" ] && pfx='❯' || pfx=' '
-      printf '\033[K  %s %s %s\n' "$pfx" "$box" "${items[$i]}" >&2
+      printf '\r' >&2; tput el >&2 2>/dev/null
+      printf '  %s %s %s\n' "$pfx" "$box" "${items[$i]}" >&2
     done
-    printf '\033[K\033[2m  ↑↓ move  ·  Space toggle  ·  a all  ·  Enter confirm\033[0m\n' >&2
-    printf '\033[K\n' >&2
+    printf '\r' >&2; tput el >&2 2>/dev/null
+    printf '\033[2m  ↑↓ move · Space toggle · a=all · Enter confirm\033[0m\n' >&2
   }
 
   _render
 
   while true; do
-    local ch seq
-    IFS= read -r -s -n1 ch 2>/dev/null || true
+    local ch b1 b2
+    IFS= read -r -n1 ch 2>/dev/null || true
 
-    if [ "$ch" = $'\x1b' ]; then
-      IFS= read -r -s -n2 seq 2>/dev/null || true
-      case "$seq" in
-        '[A'|'OA') [ "$cur" -gt 0 ] && cur=$((cur - 1)) ;;
-        '[B'|'OB') [ "$cur" -lt $((n - 1)) ] && cur=$((cur + 1)) ;;
-      esac
-    elif [ "$ch" = ' ' ]; then
-      [ "${sel[$cur]}" -eq 1 ] && sel[$cur]=0 || sel[$cur]=1
-    elif [ "$ch" = 'a' ] || [ "$ch" = 'A' ]; then
-      for ((i = 0; i < n; i++)); do sel[$i]=1; done
-    elif [ -z "$ch" ] || [ "$ch" = $'\r' ] || [ "$ch" = $'\n' ]; then
-      break
-    fi
+    case "$ch" in
+      $'\x1b')
+        # -t 1 (integer) works on bash 3.2+; fractional -t 0.1 is bash 4+ only.
+        # With min 1 time 0, [A/[B arrive immediately after ESC — no real wait.
+        # A bare ESC waits up to 1 s then returns empty (b1='', b2='').
+        IFS= read -r -n1 -t 1 b1 2>/dev/null || b1=''
+        IFS= read -r -n1 -t 1 b2 2>/dev/null || b2=''
+        case "${b1}${b2}" in
+          '[A'|'OA') [ "$cur" -gt 0 ] && cur=$((cur - 1)) ;;
+          '[B'|'OB') [ "$cur" -lt $((n - 1)) ] && cur=$((cur + 1)) ;;
+        esac
+        ;;
+      ' ')
+        [ "${sel[$cur]}" -eq 1 ] && sel[$cur]=0 || sel[$cur]=1
+        ;;
+      'a'|'A')
+        for ((i = 0; i < n; i++)); do sel[$i]=1; done
+        ;;
+      ''|$'\r'|$'\n')
+        break
+        ;;
+    esac
     _render
   done
 
-  [ -n "$saved_stty" ] && stty "$saved_stty" 2>/dev/null || true
+  printf '\033[%dB\n' "$nlines" >&2
+  [ -n "$_SAVED_STTY" ] && stty "$_SAVED_STTY" 2>/dev/null || true
+  _SAVED_STTY=''
   tput cnorm 2>/dev/null || true
 
   for ((i = 0; i < n; i++)); do
-    [ "${sel[$i]}" -eq 1 ] && printf '%s\n' "${items[$i]}"
+    [ "${sel[$i]}" -eq 1 ] && _CHECKBOX_RESULT+=("${items[$i]}")
   done
 }
-
-# ── Remote skill fetcher ──────────────────────────────────────────────────────
-fetch_skills_from_github() {
-  printf "${BOLD}Fetching skills from GitHub...${RESET}\n"
-
-  command -v curl > /dev/null 2>&1 || { printf "${RED}Error:${RESET} curl is required.\n"; exit 1; }
-
-  local listing
-  listing="$(curl -fsSL "${API_BASE}/skills")" || {
-    printf "${RED}Error:${RESET} Could not reach GitHub API.\n"; exit 1
-  }
-
-  local skill_names
-  if command -v python3 > /dev/null 2>&1; then
-    skill_names="$(printf '%s' "$listing" | python3 -c "
-import sys, json
-for item in json.load(sys.stdin):
-    if item.get('type') == 'dir':
-        print(item['name'])
-")"
-  else
-    skill_names="$(printf '%s' "$listing" | \
-      grep '"name"' | grep -v '"type"' | \
-      sed 's/.*"name": *"//;s/".*//' | grep '^aiteam-')"
-  fi
-
-  [ -z "${skill_names:-}" ] && { printf "${RED}Error:${RESET} No skills found.\n"; exit 1; }
-
-  mkdir -p "$SKILLS_DIR"
-  for name in $skill_names; do
-    mkdir -p "$SKILLS_DIR/$name"
-    if curl -fsSL "${RAW_BASE}/skills/${name}/SKILL.md" \
-         -o "$SKILLS_DIR/$name/SKILL.md" 2>/dev/null; then
-      ok "Downloaded $name"
-    else
-      warn "Could not download $name — skipped"
-      rm -rf "$SKILLS_DIR/$name"
-    fi
-  done
-  printf "\n"
-}
-
-[ "$LOCAL_MODE" -eq 0 ] && fetch_skills_from_github
-
-# ── SKILL.md parsing ──────────────────────────────────────────────────────────
-get_frontmatter_field() {
-  local file="$1" field="$2"
-  awk -v f="${field}:" '
-    /^---/ { if (++c == 2) exit; next }
-    c == 1 && index($0, f) == 1 { sub(/^[^:]+:[[:space:]]*/, ""); print; exit }
-  ' "$file"
-}
-
-get_body() {
-  awk '/^---/ { if (++c == 2) { found=1; next } } found { print }' "$1"
-}
-
-list_skills() { find "$SKILLS_DIR" -mindepth 1 -maxdepth 1 -type d | sort; }
-skill_count()  { list_skills | wc -l | tr -d ' '; }
-skill_names()  { list_skills | while IFS= read -r d; do basename "$d"; done | paste -sd ',' | sed 's/,/, /g'; }
 
 # ── Overwrite guard ───────────────────────────────────────────────────────────
 should_overwrite() {
@@ -208,24 +240,19 @@ install_to_dir() {
     target="$target_dir/$name"
 
     if [ "$LOCAL_MODE" -eq 1 ] && [ -L "$target" ] && [ "$(readlink "$target")" = "$skill_dir" ]; then
-      ok "$name (symlink up to date)"
-      installed=$((installed + 1))
-      continue
+      ok "$name (symlink up to date)"; installed=$((installed + 1)); continue
     fi
 
     if should_overwrite "$target"; then
       rm -rf "$target"
       if [ "$LOCAL_MODE" -eq 1 ]; then
-        ln -s "$skill_dir" "$target"
-        ok "$name → $target (symlink)"
+        ln -s "$skill_dir" "$target"; ok "$name (symlink)"
       else
-        cp -r "$skill_dir" "$target"
-        ok "$name → $target (copy)"
+        cp -r "$skill_dir" "$target"; ok "$name (copy)"
       fi
       installed=$((installed + 1))
     else
-      warn "$name skipped"
-      skipped=$((skipped + 1))
+      warn "$name skipped"; skipped=$((skipped + 1))
     fi
   done < <(list_skills)
 
@@ -234,127 +261,129 @@ install_to_dir() {
 
 # ── Tool installers ───────────────────────────────────────────────────────────
 install_claude_code() {
-  local do_user="$1" do_project="$2" project_path="$3"
   printf "\n${BOLD}Claude Code${RESET}\n"
-  [ "$do_user" -eq 1 ]    && install_to_dir "user-level"    "$HOME/.claude/skills"
-  [ "$do_project" -eq 1 ] && install_to_dir "project-level" "$project_path/.claude/skills"
+  [ "$1" -eq 1 ] && install_to_dir "user-level"    "$HOME/.claude/skills"
+  [ "$2" -eq 1 ] && install_to_dir "project-level" "$3/.claude/skills"
 }
 
 install_cursor() {
-  local project_path="$1"
-  local rules_dir="$project_path/.cursor/rules"
+  local rules_dir="$1/.cursor/rules"
   mkdir -p "$rules_dir"
   printf "\n${BOLD}Cursor IDE${RESET} → %s\n" "$rules_dir"
-
   local installed=0 skipped=0
   while IFS= read -r skill_dir; do
     local name out description body
     name="$(basename "$skill_dir")"
     out="$rules_dir/$name.mdc"
-
-    if ! should_overwrite "$out"; then
-      warn "$name.mdc skipped"; skipped=$((skipped + 1)); continue
-    fi
-
-    description="$(get_frontmatter_field "$skill_dir/SKILL.md" "description")"
-    body="$(get_body "$skill_dir/SKILL.md")"
-
-    printf -- '---\ndescription: %s\nglobs: \nalwaysApply: false\n---\n\n%s\n' \
-      "$description" "$body" > "$out"
-
-    ok "$name → $out"
-    installed=$((installed + 1))
+    if ! should_overwrite "$out"; then warn "$name.mdc skipped"; skipped=$((skipped+1)); continue; fi
+    description="$(awk -v f='description:' '/^---/{if(++c==2)exit;next} c==1&&index($0,f)==1{sub(/^[^:]+:[[:space:]]*/,"");print;exit}' "$skill_dir/SKILL.md")"
+    body="$(awk '/^---/{if(++c==2){found=1;next}} found{print}' "$skill_dir/SKILL.md")"
+    printf -- '---\ndescription: %s\nglobs: \nalwaysApply: false\n---\n\n%s\n' "$description" "$body" > "$out"
+    ok "$name"; installed=$((installed+1))
   done < <(list_skills)
-
   info "$installed installed, $skipped skipped"
 }
 
 install_copilot() {
-  local do_user="$1" do_project="$2" project_path="$3"
   printf "\n${BOLD}GitHub Copilot${RESET}\n"
-  [ "$do_user" -eq 1 ]    && install_to_dir "user-level"    "$HOME/.copilot/skills"
-  [ "$do_project" -eq 1 ] && install_to_dir "project-level" "$project_path/.github/skills"
+  [ "$1" -eq 1 ] && install_to_dir "user-level"    "$HOME/.copilot/skills"
+  [ "$2" -eq 1 ] && install_to_dir "project-level" "$3/.github/skills"
 }
 
 install_opencode() {
-  local do_user="$1" do_project="$2" project_path="$3"
   printf "\n${BOLD}OpenCode${RESET}\n"
-  [ "$do_user" -eq 1 ]    && install_to_dir "user-level"    "$HOME/.config/opencode/skills"
-  [ "$do_project" -eq 1 ] && install_to_dir "project-level" "$project_path/.opencode/skills"
+  [ "$1" -eq 1 ] && install_to_dir "user-level"    "$HOME/.config/opencode/skills"
+  [ "$2" -eq 1 ] && install_to_dir "project-level" "$3/.opencode/skills"
 }
 
 install_gemini() {
-  local do_user="$1" do_project="$2" project_path="$3"
   printf "\n${BOLD}Gemini CLI${RESET}\n"
-  [ "$do_user" -eq 1 ]    && install_to_dir "user-level"    "$HOME/.gemini/skills"
-  [ "$do_project" -eq 1 ] && install_to_dir "project-level" "$project_path/.gemini/skills"
+  [ "$1" -eq 1 ] && install_to_dir "user-level"    "$HOME/.gemini/skills"
+  [ "$2" -eq 1 ] && install_to_dir "project-level" "$3/.gemini/skills"
 }
 
 install_codex() {
-  local do_user="$1" do_project="$2" project_path="$3"
   printf "\n${BOLD}Codex CLI${RESET}\n"
-  [ "$do_user" -eq 1 ]    && install_to_dir "user-level"    "$HOME/.agents/skills"
-  [ "$do_project" -eq 1 ] && install_to_dir "project-level" "$project_path/.agents/skills"
+  [ "$1" -eq 1 ] && install_to_dir "user-level"    "$HOME/.agents/skills"
+  [ "$2" -eq 1 ] && install_to_dir "project-level" "$3/.agents/skills"
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 main() {
+  # Top-level Ctrl+C / kill handler.
+  # Because checkbox_select runs in the CURRENT shell (not a subshell),
+  # this single trap covers all interactive phases.
+  _cleanup() {
+    [ -n "${_SAVED_STTY:-}" ] && stty "$_SAVED_STTY" 2>/dev/null || true
+    tput cnorm 2>/dev/null || true
+    printf '\n\n' >&2
+    exit 130
+  }
+  trap '_cleanup' INT TERM
+
+  # Fetch skill listing (names only, no downloads) for the header display
+  if [ "$LOCAL_MODE" -eq 0 ]; then
+    fetch_skill_listing
+    _count="$(remote_skill_count)"
+    _names="$(remote_skill_names)"
+  else
+    _count="$(skill_count)"
+    _names="$(skill_names)"
+  fi
+
   printf "\n${BOLD}AI Dev Team — Skill Installer${RESET}\n"
   printf "${DIM}%s${RESET}\n" "$REPO_URL"
-  printf "════════════════════════════════════════\n\n"
-  printf "%s skills found: %s\n\n" "$(skill_count)" "$(skill_names)"
+  printf "════════════════════════════════════════\n"
+  printf "%s skills: %s\n" "$_count" "$_names"
 
-  # Step 1: Scope
-  local -a scope_sel=()
-  while IFS= read -r line; do scope_sel+=("$line"); done < <(checkbox_select \
-    "Installation scope" \
+  # ── Step 1: Scope ───────────────────────────────────────────────────────────
+  checkbox_select "Where to install:" \
     "User-level  — install globally (available in all projects)" \
-    "Project     — install into a specific project directory")
+    "Project     — install into a specific project directory"
 
   local do_user=0 do_project=0
-  for s in "${scope_sel[@]+"${scope_sel[@]}"}"; do
-    case "$s" in
-      User*)    do_user=1 ;;
-      Project*) do_project=1 ;;
-    esac
+  for s in "${_CHECKBOX_RESULT[@]+"${_CHECKBOX_RESULT[@]}"}"; do
+    case "$s" in User*) do_user=1 ;; Project*) do_project=1 ;; esac
   done
 
   if [ "$do_user" -eq 0 ] && [ "$do_project" -eq 0 ]; then
-    printf "${YELLOW}⚠${RESET} No scope selected — defaulting to user-level.\n"
+    printf "${YELLOW}⚠${RESET}  No scope selected — defaulting to user-level.\n"
     do_user=1
   fi
 
-  # Step 2: Project path (only when needed)
+  # ── Step 2: Project path (only if project scope selected) ───────────────────
   if [ "$do_project" -eq 1 ]; then
-    printf "\nProject root path [%s]: " "$PROJECT_PATH"
-    read -r _path_input
-    [ -n "${_path_input:-}" ] && PROJECT_PATH="$_path_input"
+    printf "Project root path [%s]: " "$PROJECT_PATH"
+    read -r _pi
+    [ -n "${_pi:-}" ] && PROJECT_PATH="$_pi"
     if [ ! -d "$PROJECT_PATH" ]; then
-      printf "${RED}Error:${RESET} Directory not found: %s\n" "$PROJECT_PATH"
-      exit 1
+      printf "${RED}Error:${RESET} Directory not found: %s\n" "$PROJECT_PATH"; exit 1
     fi
-    printf "Installing to project: %s\n" "$PROJECT_PATH"
+    printf "Project: %s\n" "$PROJECT_PATH"
   fi
 
-  # Step 3: Tool selection
-  local -a tool_sel=()
-  while IFS= read -r line; do tool_sel+=("$line"); done < <(checkbox_select \
-    "Select AI tools" \
-    "Claude Code    — ~/.claude/skills/  or  .claude/skills/" \
-    "Cursor IDE     — .cursor/rules/*.mdc  (project only)" \
-    "GitHub Copilot — ~/.copilot/skills/  or  .github/skills/" \
-    "OpenCode       — ~/.config/opencode/skills/  or  .opencode/skills/" \
-    "Gemini CLI     — ~/.gemini/skills/  or  .gemini/skills/" \
-    "Codex CLI      — ~/.agents/skills/  or  .agents/skills/")
+  # ── Step 3: Tool selection ───────────────────────────────────────────────────
+  checkbox_select "Select AI tools:" \
+    "Claude Code     ~/.claude/skills/" \
+    "Cursor IDE      .cursor/rules/*.mdc  (project only)" \
+    "GitHub Copilot  ~/.copilot/skills/" \
+    "OpenCode        ~/.config/opencode/skills/" \
+    "Gemini CLI      ~/.gemini/skills/" \
+    "Codex CLI       ~/.agents/skills/"
 
-  if [ "${#tool_sel[@]}" -eq 0 ]; then
-    printf "${YELLOW}⚠${RESET} No tools selected. Nothing to install.\n\n"
-    exit 0
+  if [ "${#_CHECKBOX_RESULT[@]}" -eq 0 ]; then
+    printf "${YELLOW}⚠${RESET}  No tools selected. Nothing to install.\n\n"; exit 0
+  fi
+
+  # ── Download skill files now (remote mode only) ─────────────────────────────
+  if [ "$LOCAL_MODE" -eq 0 ]; then
+    fetch_skills_from_github
   fi
 
   printf "\n"
 
-  for tool in "${tool_sel[@]}"; do
+  # ── Install ──────────────────────────────────────────────────────────────────
+  for tool in "${_CHECKBOX_RESULT[@]}"; do
     case "$tool" in
       Claude*)  install_claude_code "$do_user" "$do_project" "$PROJECT_PATH" ;;
       Cursor*)  install_cursor      "$PROJECT_PATH" ;;
@@ -365,6 +394,7 @@ main() {
     esac
   done
 
+  trap - INT TERM
   printf "\n${GREEN}${BOLD}Done.${RESET}\n\n"
 }
 
