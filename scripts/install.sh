@@ -5,13 +5,35 @@
 # Usage: ./scripts/install.sh [--project-path <path>] [--force]
 #   --project-path  Root of the target project for project-level installs (default: $PWD)
 #   --force         Overwrite existing files without prompting
+#
+# Can also be run without cloning the repo:
+#   bash <(curl -fsSL https://raw.githubusercontent.com/lvendrame/ai-dev-team/main/scripts/install.sh)
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILLS_DIR="$(cd "$SCRIPT_DIR/../skills" && pwd)"
-REPO_URL="https://github.com/lvendrame/ai-dev-team"
+REPO_OWNER="lvendrame"
+REPO_NAME="ai-dev-team"
+REPO_BRANCH="main"
+REPO_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}"
+RAW_BASE="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}"
+API_BASE="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents"
 GENERATED_DATE="$(date '+%Y-%m-%d')"
+
+# ── Mode detection: local (cloned repo) vs remote (curl) ─────────────────────
+# When run via bash <(curl ...), $0 is /dev/fd/N — dirname gives /dev/fd.
+# In that case LOCAL_SKILLS_DIR won't be a real skills directory.
+_SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo "")"
+LOCAL_SKILLS_DIR="${_SCRIPT_DIR}/../skills"
+
+if [ -d "$LOCAL_SKILLS_DIR" ] && [ -n "$(ls -A "$LOCAL_SKILLS_DIR" 2>/dev/null)" ]; then
+  LOCAL_MODE=1
+  SKILLS_DIR="$(cd "$LOCAL_SKILLS_DIR" && pwd)"
+else
+  LOCAL_MODE=0
+  _TMP_ROOT="$(mktemp -d)"
+  SKILLS_DIR="${_TMP_ROOT}/skills"
+  trap 'rm -rf "$_TMP_ROOT"' EXIT
+fi
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
@@ -45,6 +67,59 @@ while [ $# -gt 0 ]; do
     *) printf "Unknown option: %s\n" "$1"; exit 1 ;;
   esac
 done
+
+# ── Remote skill fetcher ──────────────────────────────────────────────────────
+fetch_skills_from_github() {
+  printf "${BOLD}Fetching skills from GitHub...${RESET}\n"
+
+  if ! command -v curl > /dev/null 2>&1; then
+    printf "${RED}Error:${RESET} curl is required but not installed.\n"
+    exit 1
+  fi
+
+  local listing
+  listing="$(curl -fsSL "${API_BASE}/skills")" || {
+    printf "${RED}Error:${RESET} Could not reach GitHub API. Check your internet connection.\n"
+    exit 1
+  }
+
+  local skill_names
+  if command -v python3 > /dev/null 2>&1; then
+    skill_names="$(printf '%s' "$listing" | python3 -c "
+import sys, json
+for item in json.load(sys.stdin):
+    if item.get('type') == 'dir':
+        print(item['name'])
+")"
+  else
+    # Fallback: extract names from the JSON without jq/python
+    skill_names="$(printf '%s' "$listing" | \
+      grep '"name"' | grep -v '"type"' | \
+      sed 's/.*"name": *"//;s/".*//' | \
+      grep '^aiteam-')"
+  fi
+
+  if [ -z "${skill_names:-}" ]; then
+    printf "${RED}Error:${RESET} No skills found in the repository. The repo may be private or the API rate limit reached.\n"
+    exit 1
+  fi
+
+  mkdir -p "$SKILLS_DIR"
+  for name in $skill_names; do
+    mkdir -p "$SKILLS_DIR/$name"
+    if curl -fsSL "${RAW_BASE}/skills/${name}/SKILL.md" \
+         -o "$SKILLS_DIR/$name/SKILL.md" 2>/dev/null; then
+      ok "Downloaded $name"
+    else
+      warn "Could not download $name — skipped"
+      rm -rf "$SKILLS_DIR/$name"
+    fi
+  done
+  printf "\n"
+}
+
+# Download skills if not running from local repo
+[ "$LOCAL_MODE" -eq 0 ] && fetch_skills_from_github
 
 # ── SKILL.md parsing helpers ──────────────────────────────────────────────────
 
@@ -98,16 +173,26 @@ install_claude_code() {
     name="$(basename "$skill_dir")"
     local target="$target_dir/$name"
 
-    if [ -L "$target" ] && [ "$(readlink "$target")" = "$skill_dir" ]; then
-      ok "$name (symlink already up to date)"
+    # In local mode, skip if the symlink already points to the right place
+    if [ "$LOCAL_MODE" -eq 1 ] && [ -L "$target" ] && \
+       [ "$(readlink "$target")" = "$skill_dir" ]; then
+      ok "$name (symlink up to date)"
       installed=$((installed + 1))
       continue
     fi
 
     if should_overwrite "$target"; then
       rm -rf "$target"
-      ln -s "$skill_dir" "$target"
-      ok "$name → $target"
+      if [ "$LOCAL_MODE" -eq 1 ]; then
+        # Symlink: updates propagate when the repo is pulled
+        ln -s "$skill_dir" "$target"
+        ok "$name → $target (symlink)"
+      else
+        # Copy: temp dir is cleaned up after the script exits
+        mkdir -p "$target"
+        cp "$skill_dir/SKILL.md" "$target/SKILL.md"
+        ok "$name → $target (copy)"
+      fi
       installed=$((installed + 1))
     else
       warn "$name skipped"
