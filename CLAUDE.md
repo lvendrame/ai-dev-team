@@ -65,6 +65,6 @@ Recommended invocation order for a new project:
 
 Shell scripts in `scripts/` automate skill installation, validation, or scaffolding. Convention:
 
-- `scripts/install.sh` — symlinks or copies skill files to the active Claude config directory.
+- `scripts/install.sh` — interactive multi-tool installer. Presents a menu of supported AI tools (Claude Code, Cursor, GitHub Copilot, OpenCode, Gemini CLI, Codex CLI) and installs skills to the correct location for each. Flags: `--project-path <path>` (default: `$PWD`), `--force` (overwrite without prompting).
 - `scripts/validate.sh` — checks that all skill files have required frontmatter fields.
 - Scripts must be POSIX-compatible (no bash-isms unless the shebang explicitly invokes bash).
