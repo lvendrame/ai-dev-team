@@ -135,14 +135,14 @@ When run from within the cloned repo, Claude Code skills are installed as **syml
 
 ### Supported AI tools
 
-| Tool | Install location | Format |
-|------|-----------------|--------|
-| Claude Code | `~/.claude/skills/<name>/` | Directory with `SKILL.md` |
-| Cursor IDE | `.cursor/rules/<name>.mdc` | MDC file with Cursor frontmatter |
-| GitHub Copilot | `.github/copilot-instructions.md` | Single Markdown file |
-| OpenCode | `AGENTS.md` or `~/.config/opencode/AGENTS.md` | Single Markdown file |
-| Gemini CLI | `GEMINI.md` or `~/.gemini/GEMINI.md` | Single Markdown file |
-| Codex CLI | `AGENTS.md` or `~/.codex/AGENTS.md` | Single Markdown file |
+| Tool | User-level | Project-level | Format |
+|------|-----------|--------------|--------|
+| Claude Code | `~/.claude/skills/<name>/` | `.claude/skills/<name>/` | Directory with `SKILL.md` |
+| Cursor IDE | — | `.cursor/rules/<name>.mdc` | MDC file with Cursor frontmatter |
+| GitHub Copilot | `~/.copilot/skills/<name>/` | `.github/skills/<name>/` | Directory with `SKILL.md` |
+| OpenCode | `~/.config/opencode/skills/<name>/` | `.opencode/skills/<name>/` | Directory with `SKILL.md` |
+| Gemini CLI | `~/.gemini/skills/<name>/` | `.gemini/skills/<name>/` | Directory with `SKILL.md` |
+| Codex CLI | `~/.agents/skills/<name>/` | `.agents/skills/<name>/` | Directory with `SKILL.md` |
 
 ---
 
