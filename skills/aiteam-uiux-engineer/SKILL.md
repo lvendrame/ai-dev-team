@@ -365,10 +365,27 @@ For each screen, write a standalone HTML file following these rules:
 
 ---
 
-### Phase 4: Save & Confirm
+### Phase 4: Save & Update Task
 
 Write all prototype files to `project-hub/prototypes/<task-slug>/`.
 
-Confirm:
+Then append (or replace) a `## Prototypes` section in the task file:
 
-> "Prototypes saved to project-hub/prototypes/[task-slug]/. [N] files: [list]. Open index.html in a browser to start."
+```markdown
+## Prototypes
+
+Screens prototyped by `/aiteam-uiux-engineer` on YYYY-MM-DD.
+Location: `project-hub/prototypes/[task-slug]/`
+
+| Screen | File | Description |
+|--------|------|-------------|
+| [Screen name] | `[filename].html` | [One-line description of what this screen shows] |
+```
+
+If a `## Prototypes` section already exists in the task file (e.g., from a previous prototype run), replace it entirely with the updated list. Do not alter any other section.
+
+Confirm to the user:
+
+> "Prototypes saved to project-hub/prototypes/[task-slug]/. [N] files: [list].
+> Task file updated — ## Prototypes section written with references to all screens.
+> Open index.html in a browser to start."

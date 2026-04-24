@@ -47,12 +47,19 @@ The `project-hub/` directory is the shared knowledge base written and read by sk
 | File | Written by | Read by | Purpose |
 |------|-----------|---------|---------|
 | `project-hub/Project.md` | `aiteam-project-manager` | All agents | Project charter: vision, goals, stakeholders, scope, team, constraints |
-| `project-hub/architecture.md` | `aiteam-architect` | `aiteam-architect`, `aiteam-qa-engineer` | Architecture decisions and ADRs |
-| `project-hub/tasks/*.md` | `aiteam-product-owner` | `aiteam-architect`, `aiteam-qa-engineer`, `aiteam-uiux-engineer` | Individual feature tasks in user story format |
+| `project-hub/architecture.md` | `aiteam-architect`, `aiteam-observability-engineer` | `aiteam-architect`, `aiteam-qa-engineer`, `aiteam-observability-engineer` | Architecture decisions, ADRs, and observability strategy |
+| `project-hub/tasks/*.md` | `aiteam-product-owner` | `aiteam-architect`, `aiteam-qa-engineer`, `aiteam-uiux-engineer`, `aiteam-observability-engineer` | Individual feature tasks in user story format |
 | `project-hub/design-system/` | `aiteam-uiux-engineer` | `aiteam-uiux-engineer` | CSS tokens, component library, HTML showcase, and written guide |
 | `project-hub/prototypes/<task>/` | `aiteam-uiux-engineer` | — | HTML/CSS screen prototypes per task |
+| `project-hub/tasks/*.md` (status) | `aiteam-backend-engineer` | — | Updates `## Implementation Status` and frontmatter when backend is done |
 
-Recommended invocation order for a new project: `aiteam-project-manager` → `aiteam-architect` → `aiteam-uiux-engineer` → `aiteam-product-owner` → `aiteam-architect <task>` → `aiteam-qa-engineer <task>` → `aiteam-uiux-engineer <task>`.
+Recommended invocation order for a new project:
+1. `aiteam-project-manager` — define the project charter
+2. `aiteam-architect` — define system architecture
+3. `aiteam-observability-engineer` — add observability strategy to architecture
+4. `aiteam-uiux-engineer` — build the design system
+5. `aiteam-product-owner` — write feature tasks
+6. Per task: `aiteam-architect <task>` → `aiteam-qa-engineer <task>` → `aiteam-observability-engineer <task>` → `aiteam-backend-engineer <task>` → `aiteam-frontend-engineer <task>` → `aiteam-uiux-engineer <task>`
 
 ## Scripts
 
