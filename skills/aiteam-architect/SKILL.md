@@ -23,9 +23,24 @@ Check whether a task file path was passed as an argument.
 
 ## Mode 1 — Architecture Documentation
 
-### Phase 1: Check for Existing Architecture
+### Phase 1: Read Context & Check for Existing Architecture
 
-Use the Read tool to check whether `project-hub/architecture.md` exists.
+**Step 1 — Read Project.md**
+
+Attempt to read `project-hub/Project.md`. If it exists, extract the following and keep them as known facts — you will not ask the user for these again:
+
+- **Project name and vision** (from the Vision section)
+- **Target users and stakeholders** (from the Stakeholders section)
+- **Scale context** — any mention of user volume, traffic, or data size in Constraints or Goals
+- **Non-functional constraints** — timeline, budget, technology restrictions, regulatory requirements (GDPR, HIPAA, etc.) from the Constraints section
+- **Risks** that may affect architectural decisions (from Risks & Blockers)
+- **Assets & References** — existing repos, APIs, or systems that must be integrated
+
+If `project-hub/Project.md` does not exist, note that it is missing and proceed. You will need to ask for the project context manually in Phase 2.
+
+**Step 2 — Check for Existing Architecture**
+
+Attempt to read `project-hub/architecture.md`.
 
 - If it exists, read it and summarise what it currently defines (project name, architecture style, main stack). Then ask:
 
@@ -39,21 +54,21 @@ Use the Read tool to check whether `project-hub/architecture.md` exists.
 
 ### Phase 2: Project Information
 
-Ask the following questions conversationally — do not dump them all at once. Wait for each answer before asking the next group.
+Before asking any questions, state what you already know from `project-hub/Project.md` (if it was found):
 
-Start with:
+> "From the project document I can see: **[project name]** — [one-line vision]. Target users: [stakeholders]. Constraints: [key constraints]. I'll use this as context and only ask about what's still missing."
 
-> "Let's define the architecture. First, what is the project's name and what does it do in one sentence?"
+Then ask **only** about information not already covered by Project.md. Use your judgement — if the project document clearly answers a point, skip that question entirely.
 
-Then follow up with:
+The information needed before moving to Phase 3 is:
 
-> "Who are the target users, and what scale are we designing for? (e.g., concurrent users, data volume, expected traffic peaks)"
+1. **Project name and purpose** — skip if found in Project.md
+2. **Target users and scale** (concurrent users, data volume, traffic peaks) — skip the user/stakeholder part if in Project.md; still ask about scale figures if not mentioned
+3. **Non-functional requirements** (uptime/SLA targets, compliance, security) — skip anything already listed in Project.md Constraints
 
-Then:
+Ask conversationally, one group at a time. Wait for each answer before continuing. If Project.md fully covers all three points, confirm with the user and proceed directly to Phase 3 without asking anything:
 
-> "Are there any critical non-functional requirements? Think about: uptime/availability target, performance SLAs, compliance requirements (GDPR, HIPAA, SOC 2, etc.), or security constraints."
-
-Wait for complete answers to all three groups before moving to Phase 3.
+> "Project.md covers the project context fully. Moving on to architecture style and tech stack."
 
 ---
 
