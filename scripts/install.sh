@@ -218,20 +218,33 @@ checkbox_select() {
   done
 }
 
-# ── Overwrite guard ───────────────────────────────────────────────────────────
-should_overwrite() {
-  [ ! -e "$1" ] && return 0
-  [ "$FORCE" -eq 1 ] && return 0
-  printf "  ${YELLOW}?${RESET} '%s' already exists. Overwrite? [y/N] " "$1"
-  read -r ans
-  case "$ans" in [yY]*) return 0 ;; *) return 1 ;; esac
-}
-
 # ── Generic directory installer ───────────────────────────────────────────────
 install_to_dir() {
   local label="$1" target_dir="$2"
   mkdir -p "$target_dir"
   printf "\n  ${BOLD}%s${RESET} → %s\n" "$label" "$target_dir"
+
+  # Count how many skills already exist at the target
+  local existing=0
+  while IFS= read -r skill_dir; do
+    local _n; _n="$(basename "$skill_dir")"
+    [ -e "$target_dir/$_n" ] && existing=$((existing + 1))
+  done < <(list_skills)
+
+  # If any exist, ask once how to handle them — not per file
+  local batch=""  # "yes" | "no" | "" (ask per file)
+  if [ "$FORCE" -eq 1 ]; then
+    batch="yes"
+  elif [ "$existing" -gt 0 ]; then
+    printf "  ${YELLOW}?${RESET} %d skill(s) already exist. " "$existing"
+    printf "Overwrite all? [y=yes / n=skip all / a=ask per skill]: "
+    read -r _ans
+    case "${_ans:-a}" in
+      y|Y) batch="yes" ;;
+      n|N) batch="no"  ;;
+      *)   batch=""    ;;
+    esac
+  fi
 
   local installed=0 skipped=0
   while IFS= read -r skill_dir; do
@@ -239,11 +252,25 @@ install_to_dir() {
     name="$(basename "$skill_dir")"
     target="$target_dir/$name"
 
+    # Symlink already up to date (local mode only)
     if [ "$LOCAL_MODE" -eq 1 ] && [ -L "$target" ] && [ "$(readlink "$target")" = "$skill_dir" ]; then
       ok "$name (symlink up to date)"; installed=$((installed + 1)); continue
     fi
 
-    if should_overwrite "$target"; then
+    local do_install=0
+    if [ ! -e "$target" ]; then
+      do_install=1                         # new skill — always install
+    elif [ "$batch" = "yes" ]; then
+      do_install=1                         # overwrite all
+    elif [ "$batch" = "no" ]; then
+      do_install=0                         # skip all
+    else
+      printf "  ${YELLOW}?${RESET} '%s' already exists. Overwrite? [y/N] " "$name"
+      read -r _a
+      case "$_a" in [yY]*) do_install=1 ;; *) do_install=0 ;; esac
+    fi
+
+    if [ "$do_install" -eq 1 ]; then
       rm -rf "$target"
       if [ "$LOCAL_MODE" -eq 1 ]; then
         ln -s "$skill_dir" "$target"; ok "$name (symlink)"
