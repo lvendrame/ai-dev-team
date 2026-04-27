@@ -69,3 +69,10 @@ Shell scripts in `scripts/` automate skill installation, validation, or scaffold
 - `scripts/install.sh` — interactive multi-tool installer. Presents a menu of supported AI tools (Claude Code, Cursor, GitHub Copilot, OpenCode, Gemini CLI, Codex CLI) and installs skills to the correct location for each. Flags: `--project-path <path>` (default: `$PWD`), `--force` (overwrite without prompting).
 - `scripts/validate.sh` — checks that all skill files have required frontmatter fields.
 - Scripts must be POSIX-compatible (no bash-isms unless the shebang explicitly invokes bash).
+
+## Maintenance Rule — Adding a New Agent
+
+Whenever a new agent is added to this repository, you MUST update:
+
+1. **`README.md`** — increment the agent count badge (`![Agents](…-N-blue)`), add an `### Agent Name — /aiteam-<name>` section under `## Agents`, and insert the agent at the correct step in both `### Recommended workflow` lists (project setup and per feature).
+2. **`CLAUDE.md`** — add the agent to the `project-hub/ Artifacts` table (which files it reads/writes) and insert it into the `Recommended invocation order` list.

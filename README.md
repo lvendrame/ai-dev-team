@@ -1,6 +1,6 @@
 # AI Dev Team
 
-![Agents](https://img.shields.io/badge/agents-8-blue)
+![Agents](https://img.shields.io/badge/agents-9-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Works with](https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20Cursor%20%7C%20Copilot%20%7C%20Gemini%20%7C%20OpenCode%20%7C%20Codex-purple)
 
@@ -37,6 +37,12 @@ Creates or updates `project-hub/Project.md` — the project charter. Runs a conv
 ### Product Owner — `/aiteam-product-owner`
 
 Takes a feature idea (as an argument or through a short interview), asks for supporting documentation, does web research, and writes a user story task file to `project-hub/tasks/YYYY-MM-DD-<title>.md` following the Scrum user story format (user story, context, acceptance criteria, out of scope, references).
+
+### Security Specialist — `/aiteam-security-specialist`
+
+**Without a task argument:** Reads `project-hub/Project.md` (compliance requirements, user roles, risk areas) and `project-hub/architecture.md` (stack, auth strategy, integrations), then appends a `## Security` section to the architecture document. Covers: threat model table, backend hardening (authentication, injection prevention, API security, cryptography, error handling, infrastructure), frontend hardening (CSP, XSS prevention, token handling, CORS, supply chain), compliance requirements (GDPR, HIPAA, PCI-DSS, etc.), and Security ADRs — all grounded in the OWASP Web Security Testing Guide.
+
+**With a task path:** Reads the task and the architecture's security section, then appends a `## Security Checklist` to the task with specific backend checks (input validation, auth, session, crypto, logging, rate limiting) and frontend checks (XSS, CSRF, sensitive data, CSP compliance), scoped to the feature's actual endpoints and fields. If the task changes the application-wide security posture, proposes updating `project-hub/architecture.md` with a new `SEC-ADR`.
 
 ### QA Engineer — `/aiteam-qa-engineer <task>`
 
@@ -90,17 +96,19 @@ project-hub/
 1. `/aiteam-project-manager` — define the project charter
 2. `/aiteam-architect` — define system architecture
 3. `/aiteam-observability-engineer` — add observability strategy to the architecture
-4. `/aiteam-uiux-engineer` — build the design system
+4. `/aiteam-security-specialist` — add application-wide security measures to the architecture
+5. `/aiteam-uiux-engineer` — build the design system
 
 **Per feature:**
 
-5. `/aiteam-product-owner` — write the feature task
-6. `/aiteam-architect <task>` — add Technical Design
-7. `/aiteam-qa-engineer <task>` — enrich Acceptance Criteria and add Test Plan
-8. `/aiteam-observability-engineer <task>` — add Observability section
-9. `/aiteam-uiux-engineer <task>` — generate HTML/CSS prototypes
-10. `/aiteam-backend-engineer <task>` — implement and test the backend
-11. `/aiteam-frontend-engineer <task>` — implement and test the frontend
+6. `/aiteam-product-owner` — write the feature task
+7. `/aiteam-architect <task>` — add Technical Design
+8. `/aiteam-qa-engineer <task>` — enrich Acceptance Criteria and add Test Plan
+9. `/aiteam-observability-engineer <task>` — add Observability section
+10. `/aiteam-security-specialist <task>` — add Security Checklist
+11. `/aiteam-uiux-engineer <task>` — generate HTML/CSS prototypes
+12. `/aiteam-backend-engineer <task>` — implement and test the backend
+13. `/aiteam-frontend-engineer <task>` — implement and test the frontend
 
 ---
 
